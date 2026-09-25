@@ -61,11 +61,8 @@ The original plan used Ubuntu Server (headless, CLI-only) as the protected "inte
 
 ### Network design
 
-![alt text](d.png)
-```
-[Kali - Attacker]  ---  [pfSense WAN | LAN]  ---  [Ubuntu Desktop - "Server"]
-   10.0.1.0/24              (firewall)              192.168.1.0/24
-```
+![alt text](x.png)
+
 
 | VM | Interface | IP | Notes |
 |---|---|---|---|
