@@ -1,5 +1,7 @@
 # Firewall Lab — Design & Component Setup
 
+# Phase 1
+
 This document covers **why** the lab is built this way and **how to build each VM**, up to the point where it's ready to be dropped into GNS3. Building the GNS3 topology itself (wiring, IPs-in-context, testing) is a separate follow-on document.
 
 ---
@@ -9,12 +11,42 @@ This document covers **why** the lab is built this way and **how to build each V
 ### Goal
 Practice firewall concepts (rules, NAT, logging, rule ordering, scanning/evasion) against a real, stateful firewall — pfSense — in a network topology with genuine routing between segments, rather than everything sharing one flat virtual switch.
 
-### Why GNS3 (and not just VirtualBox alone, or Docker)
-- Docker containers share a kernel and simplified virtual networking — fine for learning `iptables` syntax, but not realistic for testing routing, NAT, or a real firewall's behavior between distinct network segments.
-- GNS3 lets each VM's adapters be wired into an explicit topology (switches, links between named segments) rather than everything living on one flat network. This is what makes "traffic from the attacker has to pass through the firewall" actually true, not just implied.
-- Everything runs on VirtualBox underneath — GNS3 is the wiring/orchestration layer, not a separate hypervisor.
+### 1.1 GNS3 — What it is, why it's here, and how to install it
 
-### Why these three VMs
+### What GNS3 is
+GNS3 (Graphical Network Simulator-3) is free, open-source network-emulation software. It provides a canvas where you drag on virtual devices — routers, switches, clouds, and VMs from hypervisors like VirtualBox or VMware — and wire them together with virtual cables, exactly like a network diagram. GNS3 doesn't run the devices itself; it orchestrates other tools that do (VirtualBox, in this lab) and manages the virtual wiring between them, plus starting/stopping nodes from one place.
+
+### Where it fits in this lab's design approach
+Everything in this lab could technically run as standalone VirtualBox VMs on one flat internal network. GNS3 is the layer that turns that into an actual **topology** — Kali on one segment, pfSense sitting between two segments, the server on another — so that "traffic from the attacker has to pass through the firewall" is structurally true, not just something you assume because of how IPs were assigned. It's the orchestration/wiring layer, not a separate hypervisor; VirtualBox still does the actual work of running each VM.
+
+### Installation
+1. Download the Windows installer from https://www.gns3.com/software (free account required)
+2. Run the installer. Recommended component selection for this lab:
+   - ✅ GNS3 (core app)
+   - ✅ Npcap/WinPcap (needed for Wireshark integration and Cloud-node bridging)
+   - ✅ Wireshark (useful for packet capture on GNS3 links)
+   - ⬜ SPICE (only needed for QEMU-based appliances — not used here, since all nodes are VirtualBox VMs)
+   - ✅ Solar-PuTTY (optional SSH client — skip if you already have one you prefer)
+   - ⬜ GNS3 VM import (skip — see below)
+3. On first launch, choose **"Run everything locally"** rather than importing the separate GNS3 VM. The GNS3 VM exists mainly for appliances needing a Linux environment (e.g. Cisco IOS images); since every node here already runs directly in VirtualBox, it adds an unnecessary extra layer.
+4. Confirm the local server is actually running before proceeding — check the system tray icon, or browse to `http://localhost:3080/v2/version` (should return version info, not a connection error).
+5. Edit → Preferences → VirtualBox → confirm the path to `VBoxManage.exe` is correct (typically `C:\Program Files\Oracle\VirtualBox\VBoxManage.exe`) — if blank or wrong, GNS3 can't query VirtualBox for VM lists at all.
+
+### 1.2 Comparative study — GNS3 vs. alternatives
+
+| Tool | What it's for | Fit for this lab |
+|---|---|---|
+| **GNS3** | Topology-based network emulation, orchestrates real hypervisors (VirtualBox/VMware/QEMU) and real OS images | **Chosen** — free, integrates directly with VirtualBox, supports real firewall/OS images rather than simplified models |
+| **VirtualBox alone (no orchestrator)** | Runs VMs with manually configured internal/host-only networks | Works for 2-3 VMs on a flat network, but no visual topology, and VirtualBox-level adapter settings don't compose well once multiple VMs need coordinated wiring — exactly the friction hit repeatedly in this lab before settling on GNS3 |
+| **Docker** | Lightweight containers sharing the host kernel | Good for learning `iptables`/`nftables` *syntax*, but containers share a kernel and simplified virtual networking — not realistic for testing real routing, NAT, or a stateful firewall's behavior between distinct segments |
+| **EVE-NG** | Similar topology-based emulator to GNS3, popular in enterprise/CCNA-style training, generally considered to have a more polished web UI | A reasonable alternative; historically has leaned more toward a Linux-server-hosted deployment (web-based access) versus GNS3's simpler "install and run locally on Windows" model used here. Worth considering if this lab later grows into something with many more nodes or vendor router images |
+| **Cloud VPS (DigitalOcean/Linode/etc.)** | Real public IP, real internet-facing traffic | Great for a later phase (seeing genuine unsolicited internet traffic hit your rules), but not a topology tool — complements GNS3 rather than replacing it |
+| **GNS3 VM (separate downloadable appliance)** | Runs the GNS3 server inside a dedicated Linux VM instead of locally | Mainly useful for vendor appliances needing a Linux environment (Cisco IOS, etc.) — unnecessary overhead here since VirtualBox already runs every node directly |
+
+**Bottom line for this lab:** GNS3 running locally (not the GNS3 VM) with VirtualBox as the backing hypervisor is the right balance of realism and simplicity — more structurally honest than a flat VirtualBox network, far more realistic than Docker, and lighter-weight than standing up EVE-NG or a full cloud environment for what's currently a 3-node topology.
+
+
+### 1.3 Why these three VMs
 
 | VM | Role | Why this choice |
 |---|---|---|
@@ -22,7 +54,7 @@ Practice firewall concepts (rules, NAT, logging, rule ordering, scanning/evasion
 | **pfSense CE** | Firewall under test | Free, real production-grade firewall software (not a toy `iptables` script) — has a proper GUI for rules/NAT/logging, which makes cause-and-effect visible while learning, and is what a lot of real-world small-business/home-lab firewalls actually run. |
 | **Ubuntu Desktop** | Protected internal server + GUI access point | See below — this replaced an original Ubuntu **Server** (CLI-only) choice. |
 
-### Why Ubuntu Desktop, not Server (this was a design correction)
+### 1.4 Why Ubuntu Desktop, not Server (this was a design correction)
 The original plan used Ubuntu Server (headless, CLI-only) as the protected "internal server" target. In practice this caused a real problem: **pfSense's GUI is only reachable from the LAN side**, and a CLI-only VM has no browser to view it with. Workarounds (text-mode browsers like `lynx`, SSH tunnels from the Windows host, bridging the host directly onto the LAN via a Cloud node) were all attempted and were each unreliable or overly complex — mainly because GNS3 takes ownership of every adapter on a VM once it's part of the topology, which broke approaches that depended on a separately-configured host-only adapter surviving alongside GNS3's management.
 
 **Resolution:** use Ubuntu **Desktop** instead. It has a real browser (Firefox) on the LAN segment itself, so pfSense's GUI is reachable directly, with no tunneling, bridging, or text-browser workarounds needed. It also still runs any server-style software (nginx, openssh-server, vsftpd, etc.) needed for the actual firewall-rule exercises — the GUI is additive, not a replacement for its role as a test target.
@@ -46,8 +78,24 @@ The original plan used Ubuntu Server (headless, CLI-only) as the protected "inte
 Across this whole build, the same category of problem showed up repeatedly: **a setting made directly in VirtualBox gets silently overridden once GNS3 starts managing a VM's adapters.** The practical rule that emerged: do any one-off VirtualBox-level networking (temporary internet access for installs/updates, etc.) **only while the VM is started directly from VirtualBox, never through GNS3**, and fully power off before switching back and forth. Once a VM is wired into the GNS3 topology, GNS3 owns its adapters — don't expect VirtualBox-level adapter settings to persist through a GNS3-managed session.
 
 ---
+## 2. Recommended folder layout:
 
-## 2. Before you start — shared VirtualBox settings
+- **D:\VirtualLab**
+  - **ISOs**
+    - pfSense-CE-2.8.1-RELEASE-amd64.iso
+    - kali-linux-...iso
+    - ubuntu-desktop-...iso
+  - **VirtualBox VMs** ← VirtualBox's default VM storage location
+    - pfSense-Firewall
+    - Ubuntu-Desktop
+    - Kali
+  - **GNS3** ← GNS3 project files, separate from this
+
+One practical note: avoid OneDrive/Dropbox-synced folders for the ISOs directory if you can — large files there can trigger sync conflicts or slow VM creation if the file's mid-upload/download when VirtualBox tries to mount it.
+
+---
+
+## 3. Before you start — shared VirtualBox settings
 
 These VirtualBox-level fixes came out of real problems hit during setup and apply to **all three VMs**, not just one:
 
@@ -56,14 +104,15 @@ These VirtualBox-level fixes came out of real problems hit during setup and appl
 - **System → Motherboard → Enable I/O APIC**: checked.
 - **System → Processor → Enable Nested Paging**: checked.
 
+
 ---
 
-## 2.1. Kali Linux setup
+## 3.1. Kali Linux setup
 
-**Source:** official Kali VirtualBox `.ova` image — `https://www.kali.org/get-kali/#kali-virtual-machines`. Using the pre-built VirtualBox image avoids converting a VMware image and any leftover VMware-specific drivers/services.
+**Source:** Offensive Security/Kali provides pre-built .ova files specifically for VirtualBox: Download `.ova` image — `https://www.kali.org/get-kali/#kali-virtual-machines`.
 
 **Steps:**
-1. Download the VirtualBox `.ova`.
+1. Download the VirtualBox usually a `.7z` archive containing an `.ova`.
 2. VirtualBox → **File → Import Appliance** → point at the `.ova` → import.
 3. Apply the shared settings from Section 2 (adapter type, storage controller, etc.) if not already set by the import.
 4. Boot it once directly in VirtualBox to confirm it comes up normally.
@@ -73,7 +122,7 @@ No install/eligibility-check quirks here since it's a pre-built image — this i
 
 ---
 
-## 2.2. pfSense setup
+## 3.2. pfSense setup
 
 **Source:** pfSense **CE** (Community Edition — free), latest release, AMD64 ISO — `https://www.pfsense.org/download/` (requires a free Netgate account to download).
 
@@ -113,7 +162,7 @@ pfSense's **WAN** interface blocks essentially everything inbound by default (in
 
 ---
 
-## 2.3. Ubuntu Desktop setup
+## 3.3. Ubuntu Desktop setup
 
 **Source:** Ubuntu Desktop 26.04 LTS — `https://ubuntu.com/download/desktop`.
 
@@ -132,6 +181,69 @@ pfSense's **WAN** interface blocks essentially everything inbound by default (in
 3. Erase disk and install (safe — fresh virtual disk).
 4. Set username/password/hostname.
 5. Remove the ISO before the final reboot.
+
+### Setting a static IP on Ubuntu — Desktop vs. Server
+
+Ubuntu Desktop uses NetworkManager as the thing actually managing connections day-to-day; Netplan there is just a thin pass-through (`renderer: NetworkManager`) that generates NetworkManager profiles. Ubuntu **Server** has no GUI and typically uses `systemd-networkd` as the renderer instead. Mixing both methods on the same VM (GUI + hand-edited Netplan) creates two competing profiles for the same adapter — pick the method that matches the VM, not both.
+
+- **Method A — GUI (Ubuntu Desktop)**
+   1. Settings → Network → gear icon next to the wired connection
+   2. IPv4 tab → Method: **Manual**
+   3. Add: Address `192.168.1.10`, Netmask `255.255.255.0` (= `/24`), Gateway `192.168.1.1`
+   4. DNS: `192.168.1.1` (pfSense's resolver), or leave automatic
+   5. Apply, then disconnect/reconnect the connection (Apply alone doesn't always push the change to the live interface)
+
+- **Method B — Netplan directly (Ubuntu Server, or Desktop with `renderer: networkd`)**
+   1. Check the interface name and existing config:
+      ```bash
+      ip a
+      cat /etc/netplan/*.yaml
+      ```
+   2. Edit the file (name varies — `50-cloud-init.yaml` or similar on Server):
+      ```
+      sudo nano /etc/netplan/00-installer-config.yaml
+      ```
+   3. Set it to static — indentation must be **spaces only, consistent per level** (mixing tabs/spaces or misaligning `to:`/`via:` causes an "inconsistent indentation" error):
+      ```yaml
+      network:
+      version: 2
+      ethernets:
+         enp0s3:
+            dhcp4: false
+            addresses:
+            - 192.168.1.10/24
+            routes:
+            - to: default
+               via: 192.168.1.1
+            nameservers:
+            addresses: [192.168.1.1, 8.8.8.8]
+      ```
+   4. Validate before applying (no output = valid syntax):
+      ```bash
+      sudo netplan generate
+      ```
+   5. Apply:
+      ```bash
+      sudo netplan apply
+      ```
+   6. Verify:
+      ```bash
+      ip a
+      ping -c 4 192.168.1.1
+      ```
+
+   **If both methods were used on the same Desktop VM and now conflict** (duplicate/competing profiles, IP not updating):
+   1. `nmcli connection show` — look for both a manual GUI profile and an auto-generated `netplan-<interface>-...` entry
+   2. Delete the Netplan-generated one: `sudo nmcli connection delete "netplan-enp0s3"` (use the exact name shown)
+   3. Reset the Netplan file back to the minimal Desktop default so it stops generating a competing profile:
+      ```yaml
+      network:
+      version: 2
+      renderer: NetworkManager
+      ```
+   4. `sudo netplan apply`, then re-verify with `nmcli connection show` and `ip a`
+
+   **Note on the earlier DHCP lease:** switching from DHCP (`192.168.1.100`) to static (`192.168.1.10`) leaves the old lease unused in pfSense — no cleanup required, though it can be cleared from Status → DHCP Leases if desired. Any firewall rules or NAT mappings referencing `192.168.1.100` directly (rather than via an alias) need updating to the new static IP.
 
 ### Post-install: update and install lab packages
 With NAT still active for internet access:
@@ -159,7 +271,7 @@ sudo systemctl enable ssh
 
 ---
 
-## 3. End state before GNS3
+## 4. End state before GNS3
 
 At this point, all three VMs:
 - Boot cleanly and independently in VirtualBox
@@ -171,9 +283,9 @@ At this point, all three VMs:
 
 ---
 
-## 4. GNS3 setup
+## 5. GNS3 setup
 
-### 4.1 First-time GNS3 configuration
+### 5.1 First-time GNS3 configuration
 
 1. On first launch, GNS3 asks how to run its server. Choose **"Run everything locally."** The alternative (a separate downloadable GNS3 VM) is mainly useful for appliances that need a Linux environment (e.g. Cisco IOS images) — not needed here since all three lab VMs already run directly in VirtualBox.
 2. Confirm the local server is actually running before going further (it's a common source of errors later, e.g. *"No available server supports this type of node"*):
@@ -182,7 +294,7 @@ At this point, all three VMs:
    - Browser check: `http://localhost:3080/v2/version` should return version info, not a connection error.
 3. Edit → Preferences → VirtualBox → confirm the path to `VBoxManage.exe` is set correctly (typically `C:\Program Files\Oracle\VirtualBox\VBoxManage.exe`). If this is wrong or blank, GNS3 can't query VirtualBox for VM lists at all.
 
-### 4.2 Register each VM as a GNS3 template
+### 5.2 Register each VM as a GNS3 template
 
 Do this once per VM, **with the VM fully powered off** (not running/saved) in VirtualBox — GNS3's detection wizard generally won't list a VM that's mid-session.
 
@@ -195,7 +307,7 @@ Do this once per VM, **with the VM fully powered off** (not running/saved) in Vi
 
 Repeat for all three VMs.
 
-### 4.3 Create the project and place nodes
+### 5.3 Create the project and place nodes
 
 1. File → New Blank Project (e.g. name it `Firewall-Lab`)
 2. From the left-hand device panel, drag onto the canvas:
@@ -205,7 +317,7 @@ Repeat for all three VMs.
    - A second **Ethernet Switch** — rename to `LAN-Switch`
    - **Ubuntu Desktop**
 
-### 4.4 Wire the topology
+### 5.4 Wire the topology
 
 Using the link tool (cable icon in the left-edge toolbar): click a device, pick the adapter/port when prompted, click the next device, pick its port.
 
@@ -220,11 +332,11 @@ Kali --- WAN-Switch --- pfSense --- LAN-Switch --- Ubuntu Desktop
 
 Double check pfSense's two links land on the correct adapters — it's easy to wire both to Adapter 0 by mistake. After starting the VM, `ifconfig em0` / `ifconfig em1` on the pfSense console confirms which physical link ended up where if there's any doubt.
 
-### 4.5 Start and verify
+### 5.5 Start and verify
 
 1. Start all nodes (toolbar play button, or right-click each → Start). Give VirtualBox-backed nodes a minute to boot, same as starting them normally.
 2. Right-click any node → **Console** to open its display without switching to VirtualBox Manager. If Console doesn't appear in the menu, open VirtualBox Manager directly instead and double-click the (already running) VM — same session, different window.
-3. Set final static IPs per the scheme in Section 1 (Kali `10.0.1.10/24`, pfSense WAN `10.0.1.1/24` if not already set, Ubuntu Desktop `192.168.1.100/24` gateway `192.168.1.1`).
+3. Set final static IPs per the scheme in Section 1 (Kali `10.0.1.10/24`, pfSense WAN `10.0.1.1/24` if not already set, Ubuntu Desktop `192.168.1.10/24` gateway `192.168.1.1`).
 4. Verify connectivity:
    ```
    Kali → ping 10.0.1.1        (pfSense WAN)
@@ -232,16 +344,37 @@ Double check pfSense's two links land on the correct adapters — it's easy to w
    Kali → ping 192.168.1.10    (server, through the firewall — expected to FAIL by default, see below)
    ```
 
-### 4.6 Expected default-deny behavior
+### 5.6 Expected default-deny behavior
 
 `Kali → pfSense WAN` traffic is blocked by default — pfSense's WAN interface denies essentially everything inbound out of the box, including ICMP. This is correct, production-accurate behavior, not a wiring problem. The first real exercise (covered in the separate test-cases document) is adding a rule to allow specific traffic through and watching that change take effect.
 
-### 4.7 Reaching the pfSense GUI
+### 5.7 Reaching the pfSense GUI
 
 From **Ubuntu Desktop** (on the LAN side), open Firefox and go to `https://192.168.1.1`. Accept the self-signed certificate warning, log in with `admin` / the password set during the console setup wizard (or `pfsense` if never changed).
 
 This is the reason Ubuntu Desktop (not Server) is used as the LAN-side VM — see Section 1 for the full rationale.
 
-### 4.8 A pattern worth remembering
+### 5.8 A pattern worth remembering
 
 Any VirtualBox-level adapter setting (NAT for temporary internet access, a host-only adapter, etc.) only behaves as expected while the VM is started **directly from VirtualBox**, not through GNS3. Once a VM is running as a GNS3 node, GNS3 owns and can reset its adapters according to the topology wiring — don't expect a VirtualBox-side change to persist into a GNS3-managed session, and don't try to mix the two for the same adapter in the same session.
+
+## 6. Installation issues
+
+### pfSense
+
+```
+panic: could not malloc 98304 bytes error
+```
+
+That's a classic FreeBSD/pfSense out-of-memory panic during boot — it happens when the VM doesn't have enough RAM allocated for the kernel to initialize its internal structures (memory pools, network buffer allocations, etc.), not a corrupted ISO or bad download.
+
+### Most common fix: 
+```
+bump up the VM's RAM
+```
+
+pfSense technically boots on very little RAM, but VirtualBox's virtual hardware overhead plus FreeBSD's memory allocator needs more headroom than the bare minimum suggests. Check your VirtualBox VM settings:
+
+- Shut down the VM completely
+- VirtualBox → Settings → System → Motherboard → check Base Memory
+- Set it to at least 1024 MB (1 GB), ideally 2048 MB (2 GB) for comfortable use with logging/packages later
