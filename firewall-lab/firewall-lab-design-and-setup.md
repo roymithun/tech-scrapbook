@@ -1,7 +1,5 @@
 # Firewall Lab — Design & Component Setup
 
-# Phase 1
-
 This document covers **why** the lab is built this way and **how to build each VM**, up to the point where it's ready to be dropped into GNS3. Building the GNS3 topology itself (wiring, IPs-in-context, testing) is a separate follow-on document.
 
 ---
@@ -46,7 +44,7 @@ Everything in this lab could technically run as standalone VirtualBox VMs on one
 **Bottom line for this lab:** GNS3 running locally (not the GNS3 VM) with VirtualBox as the backing hypervisor is the right balance of realism and simplicity — more structurally honest than a flat VirtualBox network, far more realistic than Docker, and lighter-weight than standing up EVE-NG or a full cloud environment for what's currently a 3-node topology.
 
 
-### 1.3 Why these three VMs
+### 1.3 Phase 1 - Three VMs with rationale
 
 | VM | Role | Why this choice |
 |---|---|---|
@@ -59,7 +57,7 @@ The original plan used Ubuntu Server (headless, CLI-only) as the protected "inte
 
 **Resolution:** use Ubuntu **Desktop** instead. It has a real browser (Firefox) on the LAN segment itself, so pfSense's GUI is reachable directly, with no tunneling, bridging, or text-browser workarounds needed. It also still runs any server-style software (nginx, openssh-server, vsftpd, etc.) needed for the actual firewall-rule exercises — the GUI is additive, not a replacement for its role as a test target.
 
-### Network design
+### 1.5 Network design
 
 ![alt text](x.png)
 
@@ -355,7 +353,7 @@ This is the reason Ubuntu Desktop (not Server) is used as the LAN-side VM — se
 
 Any VirtualBox-level adapter setting (NAT for temporary internet access, a host-only adapter, etc.) only behaves as expected while the VM is started **directly from VirtualBox**, not through GNS3. Once a VM is running as a GNS3 node, GNS3 owns and can reset its adapters according to the topology wiring — don't expect a VirtualBox-side change to persist into a GNS3-managed session, and don't try to mix the two for the same adapter in the same session.
 
-## 6. Installation issues
+## Miscellaneous. Installation issues
 
 ### pfSense
 
@@ -375,3 +373,152 @@ pfSense technically boots on very little RAM, but VirtualBox's virtual hardware 
 - Shut down the VM completely
 - VirtualBox → Settings → System → Motherboard → check Base Memory
 - Set it to at least 1024 MB (1 GB), ideally 2048 MB (2 GB) for comfortable use with logging/packages later
+
+## 6. Phase 2 — Adding a DMZ
+
+### 6.1 Why a DMZ
+
+The topology so far only teaches "trusted vs. untrusted" (WAN vs. LAN) — allow or block. A DMZ adds a **third zone** with its own trust level, which is what most real firewall rule-writing is actually about: not just internet-vs-internal, but which internal zones can reach which other internal zones, and in which direction.
+
+Specifically, a DMZ demonstrates **directional trust**: WAN can reach the DMZ's public-facing service, but the DMZ **cannot** initiate connections back into LAN — so if the DMZ host is compromised, it can't pivot into the real internal network. That containment property is the actual point of a DMZ, and the exercises below are built to prove it holds, not just assume it.
+
+### 6.2 Updated network design
+
+![alt text](dmz.png)
+
+
+| VM | Interface | IP | Notes |
+|---|---|---|---|
+| pfSense | em2 (OPT1/DMZ) | `172.16.1.1/24` | new third interface |
+| DMZ host | eth0 | `172.16.1.10/24`, gateway `172.16.1.1` | new VM — a lightweight VM is enough; doesn't need a desktop |
+
+### 6.3 VM and VirtualBox setup
+
+To host a lightweight web server or reverse proxy like NGINX in the DMZ, **Alpine Linux** is recommended as the primary distribution, with **Ubuntu Server** serving as a secondary alternative.
+
+| Criterion | Primary: Alpine Linux | Secondary: Ubuntu Server |
+| :--- | :--- | :--- |
+| **RAM Footprint** | ~128 MB | ~1 GB |
+| **Disk Footprint** | ~150 MB | ~4 GB – 5 GB |
+| **Attack Surface** | Ultra-minimal (`musl`, `busybox`) | Standard server toolset |
+| **Init System** | OpenRC | systemd |
+| **Persist Hardening** | Supports Run-from-RAM mode | Standard persistent disk |
+
+* **Primary (Recommended): Alpine Linux**  
+  Download the Alpine "Virtual" ISO (~50 MB). Build the VM with 128 MB–256 MB RAM and a 1 GB disk. Run `setup-alpine`, install NGINX using `apk add nginx`, and manage the service with OpenRC (`rc-service nginx start`). Apply temporary NAT for updates/install, then set to *Not attached* before handing off to GNS3.
+
+* **Secondary: Ubuntu Server (CLI-only)**  
+  If Debian/`systemd` compatibility is required, build an Ubuntu Server VM using the minimal ISO. Allocate at least 1 GB RAM and an 8 GB disk. Apply the shared VirtualBox settings from Section 2, use temporary NAT for initial updates (`apt install nginx`), then set to *Not attached* before handing off to GNS3.
+
+---
+### 6.3.1 Setting Up NGINX on Alpine Linux in VirtualBox
+
+This guide walks you through setting up a lightweight Alpine Linux server running NGINX inside VirtualBox.
+
+- **Step 1: Download the Alpine ISO**
+   1. Visit the [Alpine Linux Downloads page](https://alpinelinux.org/downloads/).
+   2. Download the **Virtual** ISO (or **Standard** ISO). 
+   > *Note:* The **Virtual** variant is optimized for headless VMs with a stripped-down kernel (~50–60 MB).
+
+- S**tep 2: Create the Virtual Machine in VirtualBox**
+   1. Open VirtualBox and click **New**.
+   2. Configure the VM settings:
+      * **Name:** `DMZ Host - Alpine Virtual`
+      * **Type:** `Linux`
+      * **Version:** `Other Linux (64-bit)`
+      * **Base Memory (RAM):** `256 MB` (or `512 MB`)
+      * **Virtual Hard Disk:** `2 GB` to `5 GB` (VDI, Dynamically Allocated)
+
+- **Step 3: Boot and Install Alpine to Disk**
+
+   1. Attach the downloaded Alpine ISO file under **Settings > Storage > Controller: IDE / Optical Drive**.
+   2. Start the Virtual Machine.
+   3. At the login prompt, type `root` and press **Enter** (no password required).
+   4. Run the interactive installer script:
+      ```bash
+      setup-alpine
+      ```
+   5. Follow the configuration prompts:
+      * Select your keyboard layout and variant.
+      * Set a hostname (e.g., `alpine-server`).
+      * Choose your network interface (usually `eth0`) and select `dhcp`.
+      * Set a password for the `root` account.
+      * Select your timezone.
+      * Set proxy preferences (usually `none`).
+      * Select an APK mirror repository (enter `f` to pick the fastest mirror automatically).
+      * Choose the user setup (default or create a new user).
+      * When prompted to select a disk, enter `sda`.
+      * When asked **"How would you like to use it?"**, type `sys` (installs to disk permanently).
+      * Type `y` to confirm erasing and formatting the disk.
+   6. Once completed, shutdown the system:
+      ```bash
+      poweroff
+      ```
+   7. Remove the ISO file from VirtualBox **Storage Settings**, then power on the VM again.
+
+- **Step 4: Install and Start NGINX**
+   1. Log in to your installation as `root`.
+   2. Update the package index and install NGINX using `apk`:
+      ```bash
+      apk update
+      apk add nginx
+      ```
+   3. Enable NGINX to start on system boot and start the service now:
+      ```bash
+      rc-update add nginx default
+      service nginx start
+      ```
+   4. Verify the service status:
+      ```bash
+      service nginx status
+      ```
+---
+
+### 6.3.2 Add a third adapter to pfSense:
+
+   1. Shut pfSense down completely
+   2. VirtualBox → pfSense → Settings → Network → **Adapter 3**
+   3. Enable it, Adapter Type: **Intel PRO/1000 MT Desktop (82540EM)**, Attached to: **Not attached** (GNS3 will wire it)
+   4. In GNS3: Edit → Preferences → VirtualBox → VirtualBox VMs → pfSense template → update **Adapters** from `2` to `3`
+
+---
+
+### 6.4 Assign and configure the new interface in pfSense
+
+In GNS3, adding a third interface to a pfSense virtual appliance involves adding a network adapter to the pfSense node in your topology, mapping it to your lab topology, and then assigning it inside pfSense.
+
+- **Step 1: Add a Network Interface in GNS3**
+
+   1. Stop the pfSense node: Right-click the pfSense node and select Stop.
+   2. Delete connected links: Delete all existing links attached to the pfSense node (GNS3 requires removing links before changing adapter counts).
+   3. Open configuration: Right-click the pfSense node and select Configure.
+   4. Increase adapters: Go to the Network tab and increase the Adapters count from 2 to 3 (or more, depending on your needs).
+   5. Save changes: Click Apply, then OK.
+   6. Reconnect links: Reconnect your original WAN and LAN links, then use the Add a Link tool to connect the newly added port to your target switch/device.
+   7. Start pfSense: Right-click the pfSense node and select Start.
+
+- **Step 2. Enable and Configure the Interface**
+   1. Click on **OPT1** (or navigate to **Interfaces** > **OPT1**).
+   2. Check **Enable Interface**.
+   3. (Optional) Change the **Description** to something recognizable (e.g., `DMZOTP1 ` or `GUEST_LAN`).
+   4. Set **IPv4 Configuration Type** to **Static IPv4**.
+   5. Under **IPv4 Configuration**:
+      * Set **IPv4 Address** to your desired gateway IP for this subnet (e.g., `172.16.1.1`).
+      * Select the subnet mask (e.g., `/24`).
+   6. Click **Save** at the bottom, then click **Apply Changes**.
+
+### 6.5 GNS3 wiring
+
+1. Drag a new **Ethernet Switch** onto the canvas — rename to `DMZ-Switch`
+2. Drag the **DMZ host** VM onto the canvas
+3. Wire: **pfSense** → **DMZ-Switch**, selecting **Adapter 2** (the new third NIC, `em2`/DMZ)
+4. Wire: **DMZ-Switch** → **DMZ host**
+
+```
+Kali --- WAN-Switch --- pfSense --- LAN-Switch --- Ubuntu Desktop
+                            |
+                       DMZ-Switch
+                            |
+                        DMZ host
+```
+
