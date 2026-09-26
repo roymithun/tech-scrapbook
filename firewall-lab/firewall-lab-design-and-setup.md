@@ -500,7 +500,7 @@ In GNS3, adding a third interface to a pfSense virtual appliance involves adding
 - **Step 2. Enable and Configure the Interface**
    1. Click on **OPT1** (or navigate to **Interfaces** > **OPT1**).
    2. Check **Enable Interface**.
-   3. (Optional) Change the **Description** to something recognizable (e.g., `DMZOTP1 ` or `GUEST_LAN`).
+   3. (Optional) Change the **Description** to something recognizable (e.g., `DMZ ` or `GUEST_LAN`).
    4. Set **IPv4 Configuration Type** to **Static IPv4**.
    5. Under **IPv4 Configuration**:
       * Set **IPv4 Address** to your desired gateway IP for this subnet (e.g., `172.16.1.1`).
